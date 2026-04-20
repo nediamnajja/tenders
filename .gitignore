@@ -1,1 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
 .env
+
+# ML / training artifacts
+checkpoints/
+training/
+*.pt
+*.safetensors
+
+# Optional
+*.log
