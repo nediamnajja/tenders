@@ -22,7 +22,11 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, Organisation, Contact, Tender, ScraperState, ScraperRunLog
+from models import (
+    Base, Organisation, Contact, Tender,
+    ScraperState, ScraperRunLog,
+    EnrichedTender, TenderScore, WeightsHistory          # ← NEW
+)
 
 load_dotenv()
 
@@ -95,7 +99,7 @@ def _migrate_columns() -> None:
 
     # (table, column, postgres_type)
     migrations = [
-        # tenders
+        # ── tenders ──────────────────────────────────────────
         ("tenders",            "notice_text",                  "TEXT"),
         ("tenders",            "pdf_path",                     "TEXT"),
         ("tenders",            "updated_at",                   "TIMESTAMPTZ"),
@@ -109,21 +113,32 @@ def _migrate_columns() -> None:
         ("tenders",            "procurement_group",            "TEXT"),
         ("tenders",            "procurement_method_code",      "TEXT"),
         ("tenders",            "procurement_method_name",      "TEXT"),
-        # enriched_tenders
+
+        # ── enriched_tenders ─────────────────────────────────
         ("enriched_tenders",   "emails_found",                 "TEXT"),
         ("enriched_tenders",   "phones_found",                 "TEXT"),
         ("enriched_tenders",   "urls_found",                   "TEXT"),
         ("enriched_tenders",   "amounts_found",                "TEXT"),
         ("enriched_tenders",   "notice_text_clean",            "TEXT"),
-        # organisations
+
+        # ── enriched_tenders SCORING (NEW) ───────────────────
+        # Populated by the scoring engine when it runs.
+        # NULL until scored.
+        ("enriched_tenders",   "p_go",                        "FLOAT"),
+        ("enriched_tenders",   "score_breakdown",             "TEXT"),
+        ("enriched_tenders",   "model_version",               "INTEGER"),
+
+        # ── organisations ────────────────────────────────────
         ("organisations",      "name_normalised",              "TEXT"),
         ("organisations",      "country_iso2",                 "TEXT"),
         ("organisations",      "updated_at",                   "TIMESTAMPTZ"),
         ("organisations",      "created_at",                   "TIMESTAMPTZ"),
-        # scraper_run_log
+
+        # ── scraper_run_log ──────────────────────────────────
         ("scraper_run_log",    "already_existed",              "INTEGER"),
         ("scraper_run_log",    "notes",                        "TEXT"),
-        # normalized_tenders — columns added after initial creation
+
+        # ── normalized_tenders ───────────────────────────────
         ("normalized_tenders", "created_at",                   "TIMESTAMPTZ DEFAULT NOW()"),
         ("normalized_tenders", "updated_at",                   "TIMESTAMPTZ DEFAULT NOW()"),
         ("normalized_tenders", "language_normalized",          "VARCHAR(20)"),
@@ -144,16 +159,16 @@ def _migrate_columns() -> None:
         for table, column, col_type in migrations:
             try:
                 if is_sqlite:
-                    # SQLite does not support IF NOT EXISTS on ALTER TABLE
-                    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+                    rows     = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
                     existing = [row[1] for row in rows]
                     if column not in existing:
-                        sqlite_type = col_type.split()[0]  # strip DEFAULT clause
-                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sqlite_type}"))
+                        sqlite_type = col_type.split()[0]
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {sqlite_type}"
+                        ))
                         conn.commit()
                         logger.info(f"Migration: added {table}.{column}")
                 else:
-                    # PostgreSQL — IF NOT EXISTS handles idempotency cleanly
                     conn.execute(text(
                         f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
                     ))
@@ -161,6 +176,136 @@ def _migrate_columns() -> None:
                     logger.info(f"Migration: ensured {table}.{column}")
             except Exception as e:
                 logger.warning(f"Migration skipped for {table}.{column}: {e}")
+
+        # ── Create tender_scores table if it doesn't exist ───
+        # SQLAlchemy's create_all handles this, but we also do it
+        # explicitly here so init_db() is fully self-contained.
+        if is_sqlite:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tender_scores (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    enriched_tender_id    INTEGER NOT NULL UNIQUE
+                                          REFERENCES enriched_tenders(id)
+                                          ON DELETE CASCADE,
+                    p_go                  REAL    NOT NULL,
+                    recommendation        TEXT    NOT NULL,
+                    justification         TEXT,
+                    scored_at             TEXT,
+                    partner_decision      TEXT,
+                    partner_justification TEXT,
+                    decided_at            TEXT
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tender_scores (
+                    id                    SERIAL PRIMARY KEY,
+                    enriched_tender_id    INTEGER NOT NULL UNIQUE
+                                          REFERENCES enriched_tenders(id)
+                                          ON DELETE CASCADE,
+                    p_go                  FLOAT   NOT NULL,
+                    recommendation        VARCHAR(20) NOT NULL,
+                    justification         TEXT,
+                    scored_at             TIMESTAMPTZ DEFAULT NOW(),
+                    partner_decision      VARCHAR(10),
+                    partner_justification TEXT,
+                    decided_at            TIMESTAMPTZ
+                )
+            """))
+        conn.commit()
+        logger.info("Migration: ensured tender_scores table")
+
+
+# ─────────────────────────────────────────────────────────────
+#  SCORING HELPERS  (NEW)
+# ─────────────────────────────────────────────────────────────
+
+def get_unscored_enriched_tenders(session) -> list:
+    """
+    Return all enriched tenders that:
+      - have not been scored yet (p_go IS NULL)
+      - have a valid deadline (days_to_deadline >= 2)
+    These are the tenders the scoring engine will process.
+    """
+    return (
+        session.query(EnrichedTender)
+        .filter(
+            EnrichedTender.p_go.is_(None),
+            EnrichedTender.days_to_deadline >= 2,
+        )
+        .all()
+    )
+
+
+def save_score_to_enriched(
+    session,
+    enriched_tender_id: int,
+    p_go:               float,
+    score_breakdown:    str,    # JSON string
+    model_version:      int,
+) -> None:
+    """
+    Write p_go + score_breakdown + model_version to enriched_tenders.
+    Called for EVERY tender regardless of score.
+    """
+    tender = session.query(EnrichedTender).filter_by(id=enriched_tender_id).first()
+    if tender:
+        tender.p_go            = p_go
+        tender.score_breakdown = score_breakdown
+        tender.model_version   = model_version
+
+
+def save_tender_score(
+    session,
+    enriched_tender_id: int,
+    p_go:               float,
+    recommendation:     str,
+    justification:      str,
+) -> None:
+    """
+    Write a row to tender_scores.
+    Called ONLY for tenders where p_go >= 0.70.
+    Skips silently if a score row already exists for this tender
+    (prevents duplicates on re-runs).
+    """
+    existing = (
+        session.query(TenderScore)
+        .filter_by(enriched_tender_id=enriched_tender_id)
+        .first()
+    )
+    if existing:
+        logger.info(f"Score already exists for enriched_tender {enriched_tender_id} — skipping")
+        return
+
+    session.add(TenderScore(
+        enriched_tender_id = enriched_tender_id,
+        p_go               = p_go,
+        recommendation     = recommendation,
+        justification      = justification,
+    ))
+
+
+def get_top_tenders(session, limit: int = 5, offset: int = 0) -> list:
+    """
+    Return the top GO tenders for platform display.
+    Ordered by p_go descending.
+    Only returns tenders with valid deadline (days_to_deadline >= 2).
+
+    Usage:
+        # First 5
+        tenders = get_top_tenders(session, limit=5, offset=0)
+        # Next 5 (Show More)
+        tenders = get_top_tenders(session, limit=5, offset=5)
+    """
+    return (
+        session.query(TenderScore, EnrichedTender)
+        .join(EnrichedTender, TenderScore.enriched_tender_id == EnrichedTender.id)
+        .filter(EnrichedTender.days_to_deadline >= 2)
+        .order_by(TenderScore.p_go.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -426,7 +571,48 @@ def _tender_to_dict(tender: Tender) -> dict:
         "scraped_at":               tender.created_at.isoformat() if tender.created_at else None,
         "updated_at":               tender.updated_at.isoformat() if tender.updated_at else None,
     }
+def get_unscored_enriched_tenders(session):
+    return (
+        session.query(EnrichedTender)
+        .filter(
+            EnrichedTender.p_go.is_(None),
+            EnrichedTender.days_to_deadline >= 2,
+        )
+        .all()
+    )
 
+def save_score_to_enriched(session, enriched_tender_id, p_go, score_breakdown, model_version):
+    tender = session.query(EnrichedTender).filter_by(id=enriched_tender_id).first()
+    if tender:
+        tender.p_go             = p_go
+        tender.score_breakdown  = score_breakdown
+        tender.model_version    = model_version
+
+def save_tender_score(session, enriched_tender_id, p_go, recommendation, justification):
+    existing = (
+        session.query(TenderScore)
+        .filter_by(enriched_tender_id=enriched_tender_id)
+        .first()
+    )
+    if existing:
+        return
+    session.add(TenderScore(
+        enriched_tender_id = enriched_tender_id,
+        p_go               = p_go,
+        recommendation     = recommendation,
+        justification      = justification,
+    ))
+
+def get_top_tenders(session, limit=5, offset=0):
+    return (
+        session.query(TenderScore, EnrichedTender)
+        .join(EnrichedTender, TenderScore.enriched_tender_id == EnrichedTender.id)
+        .filter(EnrichedTender.days_to_deadline >= 2)
+        .order_by(TenderScore.p_go.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
 
 # ─────────────────────────────────────────────────────────────
 #  LEGACY SHIM
