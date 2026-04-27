@@ -407,6 +407,13 @@ def _extract_time_from_span(text: str, pos: int, window: int = 120) -> Optional[
         return None
     g = m.groups()
     # Group layout: (h_colon, m_colon, h_spelled, m_spelled, noon_mid, h_ampm, ampm)
+    def _safe(h: int, mi: int):
+        if h == 24 and mi == 0:   # 24:00 means end of day → clamp to 23:59
+            return (23, 59)
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return (h, mi)
+        return None               # invalid — ignore
+
     if g[0] and g[1]:                        # HH:MM or HHhMM
         return (int(g[0]), int(g[1]))
     if g[2] and g[3]:                        # "10 heures 00"
@@ -484,7 +491,8 @@ def extract_deadline(text: str) -> Optional[datetime]:
         time_tuple = _extract_time_from_span(text, pos)
         if time_tuple:
             h, mi = time_tuple
-            dt = dt.replace(hour=h, minute=mi, second=0)
+            if 0 <= h <= 23 and 0 <= mi <= 59:
+               dt = dt.replace(hour=h, minute=mi, second=0)
         else:
             dt = dt.replace(hour=23, minute=59, second=59)
 

@@ -402,6 +402,8 @@ _NON_CONSULTING_PATTERNS: list[str] = [
     r"\btraduction\b",
     r"\bimpression\s+de\b",
     r"\bentretien\b",
+    r"\bservices?\s+de\s+maintenance\b",         # explicit phrase match
+    r"\bservices?\s+d['']entretien\b",  
     # Spanish
     r"\btransporte\s+de\b",
     r"\blogística\b",

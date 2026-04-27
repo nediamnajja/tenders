@@ -565,6 +565,22 @@ def _clean_text(raw: Optional[str]) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  UNGM: IC title keyword pattern (compiled once at module level)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_UNGM_IC_TITLE_RE = re.compile(
+    r'\b('
+    r'Individual\s+Consultant'
+    r'|Individual\s+Contractor'
+    r'|International\s*/\s*National\s+Consultant'
+    r'|IC\s*\(Individual\s+Contractor\)'
+    r'|External\s+Collaborator'
+    r'|Trainer'
+    r')\b',
+    re.IGNORECASE,
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  TITLE NORMALIZER
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -831,6 +847,11 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
         proc_method = normalize_procurement_method(
             tender.procurement_method_name or tender.procurement_method_code
         )
+
+        # UNGM: infer IC procurement method from title keywords when not already set
+        if tender.source_portal == "ungm" and not proc_method:
+            if _UNGM_IC_TITLE_RE.search(tender.title or ""):
+                proc_method = "Individual Contractor"
 
         # Organisation + contact
         org_name_norm = None
