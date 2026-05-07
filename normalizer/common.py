@@ -579,7 +579,19 @@ _UNGM_IC_TITLE_RE = re.compile(
     r')\b',
     re.IGNORECASE,
 )
-
+_AFDB_IC_TITLE_RE = re.compile(
+    r"\b("  # open group
+    r"consultant(?:e)?\s+individuel(?:le)?"
+    r"|individual\s+consultant"
+    r"|individual\s+contractor"
+    r"|recrutement\s+d['’]un(?:e)?\s+consultant(?:e)?"
+    r"|recruitment\s+of\s+a(?:n)?\s+(?:junior\s+)?consultant"
+    r"|s[eé]lection\s+d['’]un(?:e)?\s+consultant(?:e)?\s+individuel(?:le)?"
+    r"|selection\s+of\s+(?:an?\s+)?individual\s+consultant"
+    r"|expert(?:e)?\s+individuel(?:le)?"
+    r")\b",
+    re.IGNORECASE,
+)
 # ─────────────────────────────────────────────────────────────────────────────
 #  TITLE NORMALIZER
 # ─────────────────────────────────────────────────────────────────────────────
@@ -852,6 +864,12 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
         if tender.source_portal == "ungm" and not proc_method:
             if _UNGM_IC_TITLE_RE.search(tender.title or ""):
                 proc_method = "Individual Contractor"
+        # AfDB: infer Individual Consultant from title keywords when not already set
+        if tender.source_portal == "afdb" and not proc_method:
+            if _AFDB_IC_TITLE_RE.search(tender.title or ""):
+             proc_method = "Individual Consultant"
+             if not proc_group:
+                 proc_group = "CONSULTING"
 
         # Organisation + contact
         org_name_norm = None

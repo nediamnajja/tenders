@@ -127,6 +127,15 @@ def _migrate_columns() -> None:
         ("enriched_tenders",   "p_go",                        "FLOAT"),
         ("enriched_tenders",   "score_breakdown",             "TEXT"),
         ("enriched_tenders",   "model_version",               "INTEGER"),
+        # ── enriched_tenders LLM fields ──────────────────────────────
+        ("enriched_tenders", "llm_scope_summary",           "TEXT"),
+        ("enriched_tenders", "llm_project_program",          "VARCHAR(500)"),
+        ("enriched_tenders", "llm_financing_instrument",     "VARCHAR(50)"),
+        ("enriched_tenders", "llm_bid_process_type",         "VARCHAR(50)"),
+        ("enriched_tenders", "llm_contract_duration_months", "INTEGER"),
+        ("enriched_tenders", "llm_eligibility_summary",      "TEXT"),
+        ("enriched_tenders", "llm_specific_areas",           "TEXT"),
+        ("enriched_tenders", "llm_submission_process",       "TEXT"),
 
         # ── organisations ────────────────────────────────────
         ("organisations",      "name_normalised",              "TEXT"),
@@ -153,6 +162,7 @@ def _migrate_columns() -> None:
         ("normalized_tenders", "missing_fields",               "TEXT"),
         ("normalized_tenders", "validation_flags",             "TEXT"),
         ("normalized_tenders", "normalized_at",                "TIMESTAMPTZ DEFAULT NOW()"),
+        ("normalized_tenders", "notice_text_clean", "TEXT"),
     ]
 
     with engine.connect() as conn:

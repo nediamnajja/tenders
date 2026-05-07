@@ -200,10 +200,18 @@ class EnrichedTender(Base):
     language          = Column(String(50))
     organisation_name = Column(String(500))  # final authoritative
     funding_agency = Column(String(500))
+    
     # ───────────────────────────────
-    # LLM-generated Summary
+    # LLM Enrichment (Step 2 output)
     # ───────────────────────────────
-    summary = Column(Text)
+    llm_scope_summary          = Column(Text,        nullable=True)
+    llm_project_program        = Column(String(500), nullable=True)
+    llm_financing_instrument   = Column(String(50),  nullable=True)
+    llm_bid_process_type       = Column(String(50),  nullable=True)
+    llm_contract_duration_months = Column(Integer,   nullable=True)
+    llm_eligibility_summary    = Column(Text,        nullable=True)
+    llm_specific_areas         = Column(Text,        nullable=True)  # JSON: {tags, lots}
+    llm_submission_process     = Column(Text,        nullable=True)
 
     # ───────────────────────────────
     # Metadata
@@ -322,6 +330,7 @@ class NormalizedTender(Base):
     # ─────────────────────────────────────────────────────────
     title_clean         = Column(String(1000))
     description_clean   = Column(Text)
+    notice_text_clean   = Column(Text)
 
 
     # ─────────────────────────────────────────────────────────

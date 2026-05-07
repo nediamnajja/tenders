@@ -6,7 +6,7 @@ KPMG Tender Scoring Engine — Step 2
 What this script does:
 1. Loads the latest weights from weights_history table
 2. Reads all unscored enriched_tenders (p_go IS NULL, deadline >= 2 days)
-3. Filters out Individual Consultant / Individual Contractor tenders
+3. Filters out Individual Consultant / Individual Contractor tenders and ONG
 4. For each tender:
    - Encodes features (country tier, sector, procurement, agency, budget, deadline)
    - Computes Z and P(GO) using logistic regression formula
@@ -16,9 +16,8 @@ What this script does:
 5. Prints a summary of results
 
 Thresholds:
-    STRONG GO : p_go >= 0.85
-    GO        : p_go >= 0.75
-
+    STRONG GO : p_go >= 0.80
+    GO        : p_go >= 0.70
 Hard filters (excluded before scoring):
     - days_to_deadline < 2 (expired or imminent)
     - procurement_method_name contains Individual Consultant / Contractor
@@ -34,6 +33,7 @@ import math
 from datetime import datetime, timezone
 import sys
 import os
+import re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from db import get_session, get_unscored_enriched_tenders, save_score_to_enriched, save_tender_score
@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 # THRESHOLDS
 # =============================================================================
 
-THRESHOLD_GO        = 0.75
-THRESHOLD_STRONG_GO = 0.85
+THRESHOLD_GO        = 0.70
+THRESHOLD_STRONG_GO = 0.80
 
 # Procurement method names that should never be scored
 # These are individual assignments — not meant for consulting firms
@@ -58,6 +58,19 @@ EXCLUDED_PROCUREMENT_METHODS = {
     "ic selection",
     "individual",
 }
+_EXCLUDED_TITLE_RE = re.compile(
+    r'\b('
+    r'ong\b'
+    r'|organisation\s+non\s+gouvernementale'
+    r'|ngo\b'
+    r'|non[\s\-]governmental\s+organ'
+    r'|implementing\s+partner'
+    r'|partenaire\s+de\s+mise\s+en\s+(?:œuvre|oeuvre)'
+    r'|appel\s+(?:à|a)\s+(?:des?\s+)?partenaires?'
+    r'|call\s+for\s+(?:implementing\s+)?partners?'
+    r')\b',
+    re.IGNORECASE,
+)
 
 # =============================================================================
 # 1. CONSTANTS
@@ -202,6 +215,12 @@ def should_exclude(tender) -> tuple[bool, str]:
     method = (tender.procurement_method_name or "").strip().lower()
     if any(excl in method for excl in EXCLUDED_PROCUREMENT_METHODS):
         return True, f"individual assignment excluded ({tender.procurement_method_name})"
+          
+    # Filter 3 — NGO / implementing partner tenders
+    title = (tender.title_clean or "").strip()
+    if _EXCLUDED_TITLE_RE.search(title):
+        return True, f"NGO/implementing partner tender excluded"
+
 
     return False, ""
 

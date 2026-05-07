@@ -78,7 +78,7 @@ BUDGET_MAX = 1_000_000_000
 NOW                 = datetime.now(timezone.utc)
 DEADLINE_MAX_FUTURE = NOW + relativedelta(years=2)
 
-DEFAULT_PORTALS = ["afdb", "worldbank", "undp", "ungm"]
+DEFAULT_PORTALS = ["afdb"]
 
 # Maximum character distance between a keyword anchor and a date for
 # the date to be considered "anchored" (high confidence).

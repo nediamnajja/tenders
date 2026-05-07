@@ -82,7 +82,8 @@ PIPELINE = [
     ("Enrichment — Procurement",   os.path.join("enricher", "procurment.py")),
 
     # ── STEP 8: Scoring ──────────────────────────────────────
-    ("Scoring — Logistic Regression", os.path.join("scoring", "logistic_regression.py")),
+    ("Scoring — Logistic Regression", os.path.join("scoring", "newlogisticregression.py")),
+    ("Scoring — report", os.path.join("scoring", "repport.py")),
 
     # ── STEP 9: Email Alert ──────────────────────────────────
     ("Email Alert", "alerts/email_alert.py"),
