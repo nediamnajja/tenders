@@ -498,7 +498,7 @@ class WeightsHistory(Base):
     # ───────────────────────────────
     # Training Info
     # ───────────────────────────────
-    trained_at    = Column(String(50),              nullable=True)
+    trained_at    = Column(DateTime(timezone=True), nullable=True)
     updated_at    = Column(DateTime(timezone=True), default=_now)
     
 

@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -112,16 +113,13 @@ LIFECYCLE_MAP: dict[str, tuple[str, str]] = {
 }
 
 # ── Procurement group: code or full name → normalized pipeline value ─────────
-# WorldBank uses codes: CS, CW, GO, NC
-# Normalized to match pipeline values used in enrichment and procurement_group.py:
-#   CONSULTING, WORKS, GOODS, NON-CONSULTING
 PROCUREMENT_GROUP_MAP: dict[str, str] = {
     # WorldBank codes
     "CS":                      "CONSULTING",
-    "CW":                      "WORKS",           # Civil Works → WORKS
+    "CW":                      "WORKS",
     "GO":                      "GOODS",
     "NC":                      "NON-CONSULTING",
-    # Full name variants (case-insensitive fallback in normalize_procurement_group)
+    # Full name variants
     "Civil Works":             "WORKS",
     "Consulting Services":     "CONSULTING",
     "Goods":                   "GOODS",
@@ -166,46 +164,367 @@ CURRENCY_MAP: dict[str, str] = {
 
 # ── Language ──────────────────────────────────────────────────────────────────
 LANGUAGE_MAP: dict[str, str] = {
-    "english":    "en", "en": "en", "eng": "en",
-    "french":     "fr", "fr": "fr", "fra": "fr", "français": "fr",
-    "spanish":    "es", "es": "es", "spa": "es",
-    "arabic":     "ar", "ar": "ar",
-    "portuguese": "pt", "pt": "pt",
-    "russian":    "ru", "ru": "ru",
+    "english":    "English", "en": "English", "eng": "English",
+    "french":     "French",  "fr": "French",  "fra": "French",  "français": "French",
+    "spanish":    "Spanish", "es": "Spanish", "spa": "Spanish",
+    "arabic":     "Arabic",  "ar": "Arabic",
+    "portuguese": "Portuguese", "pt": "Portuguese",
+    "russian":    "Russian", "ru": "Russian",
 }
 
-# ── Country aliases → normalized name ────────────────────────────────────────
+# ── Country aliases ───────────────────────────────────────────────────────────
+# Keys: lowercased + stripped (all variants we've ever seen)
+# Values: single canonical English name
+#
+# Rules:
+#   - Always add BOTH the accented French form AND the unaccented form
+#   - Always add ALL apostrophe variants (straight ' and curly \u2019)
+#   - UN official long names map to our short canonical names
 COUNTRY_ALIASES: dict[str, str] = {
-    "democratic republic of congo":  "Democratic Republic of the Congo",
-    "drc":                           "Democratic Republic of the Congo",
-    "congo, democratic republic":    "Democratic Republic of the Congo",
-    "congo, rep.":                   "Republic of the Congo",
-    "tanzania":                      "United Republic of Tanzania",
-    "ivory coast":                   "Côte d'Ivoire",
-    "cote d'ivoire":                 "Côte d'Ivoire",
-    "cote divoire":                  "Côte d'Ivoire",
-    "west bank and gaza":            "Palestinian Territory",
-    "west bank":                     "Palestinian Territory",
-    "gaza":                          "Palestinian Territory",
-    "lao pdr":                       "Laos",
-    "lao":                           "Laos",
-    "vietnam":                       "Viet Nam",
-    "viet nam":                      "Viet Nam",
-    "south korea":                   "Republic of Korea",
-    "north korea":                   "Democratic People's Republic of Korea",
-    "russia":                        "Russian Federation",
-    "iran":                          "Islamic Republic of Iran",
-    "syria":                         "Syrian Arab Republic",
-    "bolivia":                       "Plurinational State of Bolivia",
-    "moldova":                       "Republic of Moldova",
-    "micronesia":                    "Federated States of Micronesia",
-    "trinidad":                      "Trinidad and Tobago",
-    "saint kitts":                   "Saint Kitts and Nevis",
-    "global":                        "Global / Multi-Country",
-    "multi-country":                 "Global / Multi-Country",
-    "regional":                      "Regional",
-    "various":                       "Global / Multi-Country",
+
+    # ── Tunisia ───────────────────────────────────────────────────────────────
+    "tunisie":                               "Tunisia",
+    "tunisia":                               "Tunisia",
+
+    # ── Morocco ───────────────────────────────────────────────────────────────
+    "maroc":                                 "Morocco",
+    "morocco":                               "Morocco",
+
+    # ── Algeria ───────────────────────────────────────────────────────────────
+    "algérie":                               "Algeria",
+    "algerie":                               "Algeria",
+    "algeria":                               "Algeria",
+
+    # ── Côte d'Ivoire ─────────────────────────────────────────────────────────
+    "côte d'ivoire":                         "Côte d'Ivoire",   # accented, straight apostrophe
+    "cote d'ivoire":                         "Côte d'Ivoire",   # unaccented, straight apostrophe
+    "côte d\u2019ivoire":                    "Côte d'Ivoire",   # accented, curly apostrophe
+    "cote d\u2019ivoire":                    "Côte d'Ivoire",   # unaccented, curly apostrophe
+    "cote divoire":                          "Côte d'Ivoire",   # no apostrophe
+    "ivory coast":                           "Côte d'Ivoire",
+
+    # ── Senegal ───────────────────────────────────────────────────────────────
+    "sénégal":                               "Senegal",
+    "senegal":                               "Senegal",
+
+    # ── Guinea ────────────────────────────────────────────────────────────────
+    "guinée":                                "Guinea",
+    "guinee":                                "Guinea",
+    "guinea":                                "Guinea",
+
+    # ── Guinea-Bissau ─────────────────────────────────────────────────────────
+    "guinée-bissau":                         "Guinea-Bissau",
+    "guinee-bissau":                         "Guinea-Bissau",
+    "guinée bissau":                         "Guinea-Bissau",
+    "guinee bissau":                         "Guinea-Bissau",
+    "guinea-bissau":                         "Guinea-Bissau",
+
+    # ── Equatorial Guinea ─────────────────────────────────────────────────────
+    "guinée équatoriale":                    "Equatorial Guinea",
+    "guinee equatoriale":                    "Equatorial Guinea",
+    "guinée equatoriale":                    "Equatorial Guinea",
+    "equatorial guinea":                     "Equatorial Guinea",
+
+    # ── Benin ─────────────────────────────────────────────────────────────────
+    "bénin":                                 "Benin",
+    "benin":                                 "Benin",
+
+    # ── Chad ──────────────────────────────────────────────────────────────────
+    "tchad":                                 "Chad",
+    "chad":                                  "Chad",
+
+    # ── Cameroon ─────────────────────────────────────────────────────────────
+    "cameroun":                              "Cameroon",
+    "cameroon":                              "Cameroon",
+
+    # ── Comoros ───────────────────────────────────────────────────────────────
+    "comores":                               "Comoros",
+    "comoros":                               "Comoros",
+
+    # ── Mauritania ────────────────────────────────────────────────────────────
+    "mauritanie":                            "Mauritania",
+    "mauritania":                            "Mauritania",
+
+    # ── Syria ─────────────────────────────────────────────────────────────────
+    "syrian arab republic":                  "Syria",
+    "syria":                                 "Syria",
+
+    # ── Turkey ───────────────────────────────────────────────────────────────
+    "türkiye":                               "Turkey",
+    "turkiye":                               "Turkey",
+    "turkey":                                "Turkey",
+
+    # ── Kyrgyzstan ────────────────────────────────────────────────────────────
+    "kyrgyz republic":                       "Kyrgyzstan",
+    "kyrgyzstan":                            "Kyrgyzstan",
+
+    # ── Moldova ───────────────────────────────────────────────────────────────
+    "republic of moldova":                   "Moldova",
+    "moldova":                               "Moldova",
+
+    # ── Tanzania ──────────────────────────────────────────────────────────────
+    "united republic of tanzania":           "Tanzania",
+    "tanzania":                              "Tanzania",
+
+    # ── North Macedonia ───────────────────────────────────────────────────────
+    "republic of north macedonia":           "North Macedonia",
+    "north macedonia":                       "North Macedonia",
+
+    # ── DR Congo ──────────────────────────────────────────────────────────────
+    "democratic republic of the congo":      "DR Congo",
+    "democratic republic of congo":          "DR Congo",
+    "congo, democratic republic":            "DR Congo",
+    "drc":                                   "DR Congo",
+    "drc - angola":                          "DR Congo",
+    "dr congo":                              "DR Congo",
+
+    # ── Congo (Republic) ──────────────────────────────────────────────────────
+    "congo":                                 "Congo",
+    "republic of the congo":                 "Congo",
+    "congo, rep.":                           "Congo",
+
+    # ── Bolivia ───────────────────────────────────────────────────────────────
+    "plurinational state of bolivia":        "Bolivia",
+    "bolivia":                               "Bolivia",
+
+    # ── Vietnam ───────────────────────────────────────────────────────────────
+    "viet nam":                              "Vietnam",
+    "vietnam":                               "Vietnam",
+
+    # ── Laos ──────────────────────────────────────────────────────────────────
+    "lao people's democratic republic":      "Laos",
+    "lao people\u2019s democratic republic": "Laos",
+    "lao pdr":                               "Laos",
+    "lao":                                   "Laos",
+    "laos":                                  "Laos",
+
+    # ── Palestine ─────────────────────────────────────────────────────────────
+    "palestinian territories":               "Palestine",
+    "palestinian territory":                 "Palestine",
+    "west bank and gaza":                    "Palestine",
+    "west bank":                             "Palestine",
+    "gaza":                                  "Palestine",
+    "palestine":                             "Palestine",
+
+    # ── Eswatini (formerly Swaziland) ─────────────────────────────────────────
+    "swaziland":                             "Eswatini",
+    "eswatini":                              "Eswatini",
+
+    # ── Timor-Leste ───────────────────────────────────────────────────────────
+    "timor leste":                           "Timor-Leste",
+    "timor-leste":                           "Timor-Leste",
+
+    # ── Cape Verde ────────────────────────────────────────────────────────────
+    "cabo verde":                            "Cape Verde",
+    "cape verde":                            "Cape Verde",
+
+    # ── Sao Tome and Principe ─────────────────────────────────────────────────
+    "sao tome and principe":                 "São Tomé and Príncipe",
+    "são tome and príncipe":                 "São Tomé and Príncipe",
+    "são tomé and príncipe":                 "São Tomé and Príncipe",
+
+    # ── Malawi (typo fix) ─────────────────────────────────────────────────────
+    "malawai":                               "Malawi",
+    "malawi":                                "Malawi",
+
+    # ── United States ─────────────────────────────────────────────────────────
+    "united states of america":              "United States",
+    "united states":                         "United States",
+    "usa":                                   "United States",
+
+    # ── Bosnia ────────────────────────────────────────────────────────────────
+    "bosnia and herzegovina":                "Bosnia and Herzegovina",
+
+    # ── Micronesia ────────────────────────────────────────────────────────────
+    "federated states of micronesia":        "Micronesia",
+    "micronesia":                            "Micronesia",
+
+    # ── Korea ─────────────────────────────────────────────────────────────────
+    "south korea":                           "Republic of Korea",
+    "republic of korea":                     "Republic of Korea",
+    "north korea":                           "North Korea",
+    "democratic people's republic of korea": "North Korea",
+
+    # ── Russia ────────────────────────────────────────────────────────────────
+    "russia":                                "Russian Federation",
+    "russian federation":                    "Russian Federation",
+
+    # ── Iran ──────────────────────────────────────────────────────────────────
+    "iran":                                  "Iran",
+    "islamic republic of iran":              "Iran",
+
+    # ── Saint Lucia / Sint Maarten ────────────────────────────────────────────
+    "st. lucia":                             "Saint Lucia",
+    "saint lucia":                           "Saint Lucia",
+    "st maarten":                            "Sint Maarten",
+    "sint maarten":                          "Sint Maarten",
+
+    # ── Trinidad ──────────────────────────────────────────────────────────────
+    "trinidad":                              "Trinidad and Tobago",
+    "trinidad and tobago":                   "Trinidad and Tobago",
+
+    # ── Saint Kitts ───────────────────────────────────────────────────────────
+    "saint kitts":                           "Saint Kitts and Nevis",
+    "saint kitts and nevis":                 "Saint Kitts and Nevis",
+
+    # ── Already clean — ensure consistent casing ──────────────────────────────
+    "pakistan":                              "Pakistan",
+    "india":                                 "India",
+    "nigeria":                               "Nigeria",
+    "bangladesh":                            "Bangladesh",
+    "ukraine":                               "Ukraine",
+    "colombia":                              "Colombia",
+    "madagascar":                            "Madagascar",
+    "somalia":                               "Somalia",
+    "kenya":                                 "Kenya",
+    "lebanon":                               "Lebanon",
+    "afghanistan":                           "Afghanistan",
+    "burundi":                               "Burundi",
+    "philippines":                           "Philippines",
+    "mozambique":                            "Mozambique",
+    "angola":                                "Angola",
+    "ethiopia":                              "Ethiopia",
+    "uzbekistan":                            "Uzbekistan",
+    "south sudan":                           "South Sudan",
+    "brazil":                                "Brazil",
+    "indonesia":                             "Indonesia",
+    "nepal":                                 "Nepal",
+    "uganda":                                "Uganda",
+    "liberia":                               "Liberia",
+    "honduras":                              "Honduras",
+    "niger":                                 "Niger",
+    "sierra leone":                          "Sierra Leone",
+    "montenegro":                            "Montenegro",
+    "mongolia":                              "Mongolia",
+    "zimbabwe":                              "Zimbabwe",
+    "switzerland":                           "Switzerland",
+    "sri lanka":                             "Sri Lanka",
+    "jordan":                                "Jordan",
+    "central african republic":              "Central African Republic",
+    "albania":                               "Albania",
+    "panama":                                "Panama",
+    "haiti":                                 "Haiti",
+    "kazakhstan":                            "Kazakhstan",
+    "tajikistan":                            "Tajikistan",
+    "guatemala":                             "Guatemala",
+    "ecuador":                               "Ecuador",
+    "egypt":                                 "Egypt",
+    "gambia":                                "Gambia",
+    "georgia":                               "Georgia",
+    "lesotho":                               "Lesotho",
+    "cambodia":                              "Cambodia",
+    "peru":                                  "Peru",
+    "djibouti":                              "Djibouti",
+    "togo":                                  "Togo",
+    "armenia":                               "Armenia",
+    "china":                                 "China",
+    "mali":                                  "Mali",
+    "zambia":                                "Zambia",
+    "argentina":                             "Argentina",
+    "chile":                                 "Chile",
+    "burkina faso":                          "Burkina Faso",
+    "iraq":                                  "Iraq",
+    "sudan":                                 "Sudan",
+    "serbia":                                "Serbia",
+    "ghana":                                 "Ghana",
+    "yemen":                                 "Yemen",
+    "mexico":                                "Mexico",
+    "venezuela":                             "Venezuela",
+    "cuba":                                  "Cuba",
+    "papua new guinea":                      "Papua New Guinea",
+    "italy":                                 "Italy",
+    "thailand":                              "Thailand",
+    "el salvador":                           "El Salvador",
+    "maldives":                              "Maldives",
+    "rwanda":                                "Rwanda",
+    "gabon":                                 "Gabon",
+    "myanmar":                               "Myanmar",
+    "libya":                                 "Libya",
+    "paraguay":                              "Paraguay",
+    "south africa":                          "South Africa",
+    "suriname":                              "Suriname",
+    "denmark":                               "Denmark",
+    "kiribati":                              "Kiribati",
+    "costa rica":                            "Costa Rica",
+    "dominican republic":                    "Dominican Republic",
+    "namibia":                               "Namibia",
+    "seychelles":                            "Seychelles",
+    "samoa":                                 "Samoa",
+    "fiji":                                  "Fiji",
+    "belize":                                "Belize",
+    "malaysia":                              "Malaysia",
+    "turkmenistan":                          "Turkmenistan",
+    "romania":                               "Romania",
+    "bhutan":                                "Bhutan",
+    "kosovo":                                "Kosovo",
+    "jamaica":                               "Jamaica",
+    "bahrain":                               "Bahrain",
+    "solomon islands":                       "Solomon Islands",
+    "guyana":                                "Guyana",
+    "cyprus":                                "Cyprus",
+    "vanuatu":                               "Vanuatu",
+    "barbados":                              "Barbados",
+    "marshall islands":                      "Marshall Islands",
+    "united kingdom":                        "United Kingdom",
+    "mauritius":                             "Mauritius",
+    "netherlands":                           "Netherlands",
+    "qatar":                                 "Qatar",
+    "tonga":                                 "Tonga",
+    "germany":                               "Germany",
+    "eritrea":                               "Eritrea",
+    "belarus":                               "Belarus",
+    "dominica":                              "Dominica",
+    "botswana":                              "Botswana",
+    "uruguay":                               "Uruguay",
+    "nicaragua":                             "Nicaragua",
+    "portugal":                              "Portugal",
+    "canada":                                "Canada",
+    "bahamas":                               "Bahamas",
+    "greece":                                "Greece",
+    "tuvalu":                                "Tuvalu",
+    "norway":                                "Norway",
+    "azerbaijan":                            "Azerbaijan",
+    "western sahara":                        "Western Sahara",
+    "bulgaria":                              "Bulgaria",
+    "france":                                "France",
+    "antigua and barbuda":                   "Antigua and Barbuda",
+    "somaliland":                            "Somaliland",
+    "saudi arabia":                          "Saudi Arabia",
+
+    # ── Regional / multi-country ──────────────────────────────────────────────
+    "multiple destinations":                 "Multiple Countries",
+    "multinational":                         "Multiple Countries",
+    "multi-country":                         "Multiple Countries",
+    "various":                               "Multiple Countries",
+    "global":                                "Multiple Countries",
+    "worldwide":                             "Multiple Countries",
+    "eastern and southern africa":           "Eastern and Southern Africa",
+    "western and central africa":            "Western and Central Africa",
+    "central asia":                          "Central Asia",
+    "east asia and pacific":                 "East Asia and Pacific",
+    "caribbean":                             "Caribbean",
+    "western balkans":                       "Western Balkans",
+    "pacific 1":                             "Pacific",
+    "pacific 2":                             "Pacific",
+    "southwest indian ocean":                "Southwest Indian Ocean",
+    "horn of africa":                        "Horn of Africa",
+    "southern africa":                       "Southern Africa",
+    "central africa":                        "Central Africa",
+    "oecs countries":                        "OECS Countries",
+    "regional":                              "Regional",
 }
+
+# Keywords that trigger is_multi_country = True
+_GLOBAL_KEYWORDS = {
+    "multiple countries", "multinational", "multi-country",
+    "various", "global", "worldwide", "regional",
+    "eastern and southern africa", "western and central africa",
+    "central asia", "east asia and pacific", "caribbean",
+    "western balkans", "pacific", "southwest indian ocean",
+    "horn of africa", "southern africa", "central africa",
+    "oecs countries",
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  AfDB TITLE — notice type and country extraction
@@ -234,12 +553,12 @@ _AFDB_NOTICE_PREFIX_MAP: dict[str, str] = {
 }
 
 _AFDB_COUNTRY_ABBR: dict[str, str] = {
-    "RDC":           "Democratic Republic of the Congo",
-    "DRC":           "Democratic Republic of the Congo",
+    "RDC":           "DR Congo",
+    "DRC":           "DR Congo",
     "RCA":           "Central African Republic",
     "CAR":           "Central African Republic",
-    "ROC":           "Republic of the Congo",
-    "MULTINATIONAL": "Multinational",
+    "ROC":           "Congo",
+    "MULTINATIONAL": "Multiple Countries",
 }
 
 _AFDB_BODY_SIGNALS = {
@@ -250,10 +569,6 @@ _AFDB_BODY_SIGNALS = {
 
 
 def _parse_afdb_title(raw_title: str) -> tuple[str | None, str | None]:
-    """
-    Extract (notice_type_code, country_raw) from a raw AfDB title string.
-    Returns raw strings only — normalization applied downstream.
-    """
     if not raw_title:
         return None, None
 
@@ -295,10 +610,6 @@ def _parse_afdb_title(raw_title: str) -> tuple[str | None, str | None]:
 
 
 def _extract_afdb_notice_and_country(tender) -> tuple:
-    """
-    Resolve notice_type and country for an AfDB tender.
-    Priority: structured fields first, title parsing as fallback.
-    """
     notice_code = normalize_notice_type(tender.notice_type)
     title_code, title_country = _parse_afdb_title(tender.title or "")
 
@@ -333,7 +644,6 @@ _DATE_FORMATS = [
 
 
 def parse_date(raw: Optional[str], time_part: Optional[str] = None) -> Optional[datetime]:
-    """Parse a date string (+optional time) into a UTC-aware datetime."""
     if not raw:
         return None
     raw = str(raw).strip()
@@ -376,7 +686,6 @@ _MULTIPLIERS = {
 
 
 def parse_budget(raw: Optional[str]) -> tuple[Optional[float], Optional[str]]:
-    """Returns (numeric_value, currency_iso) or (None, None)."""
     if not raw:
         return None, None
     text = str(raw).strip().upper()
@@ -405,7 +714,6 @@ def parse_budget(raw: Optional[str]) -> tuple[Optional[float], Optional[str]]:
 # ── Notice type ───────────────────────────────────────────────────────────────
 
 def normalize_notice_type(raw: Optional[str]) -> Optional[str]:
-    """Returns internal code (e.g. 'IFB') or None."""
     if not raw:
         return None
     raw = str(raw).strip()
@@ -419,7 +727,6 @@ def normalize_notice_type(raw: Optional[str]) -> Optional[str]:
 
 
 def notice_type_label(code: Optional[str]) -> Optional[str]:
-    """Full display name, e.g. 'IFB' → 'Invitation for Bids'."""
     return NOTICE_TYPE_LABELS.get(code) if code else None
 
 
@@ -430,10 +737,6 @@ def resolve_lifecycle(
     deadline_dt: Optional[datetime],
     status_id:   Optional[int],
 ) -> tuple[Optional[str], Optional[str]]:
-    """
-    Returns (lifecycle_stage, status_normalized).
-    Priority: award status_id > shortlist status_id > deadline passed > notice type map.
-    """
     now = _now_utc()
     AWARD_STATUS_IDS     = {5, 6, 50, 51}
     SHORTLIST_STATUS_IDS = {3, 30}
@@ -482,33 +785,89 @@ def normalize_procurement_method(raw: Optional[str]) -> Optional[str]:
 # ── Language ──────────────────────────────────────────────────────────────────
 
 def normalize_language(raw: Optional[str]) -> Optional[str]:
+    """Returns full English name e.g. 'French', 'English' — matches DB values."""
     if not raw:
         return None
-    return LANGUAGE_MAP.get(str(raw).strip().lower(), str(raw).strip().lower()[:5])
+    return LANGUAGE_MAP.get(str(raw).strip().lower(), str(raw).strip())
 
 
 # ── Country ───────────────────────────────────────────────────────────────────
 
+def _lookup_alias(key: str) -> Optional[str]:
+    """
+    4-step lookup against COUNTRY_ALIASES:
+      1. Direct match
+      2. Strip Unicode accents, try again
+      3. Replace curly apostrophes with straight, try again
+      4. Both accent-strip + apostrophe replace, try again
+    Returns canonical name or None if no match found.
+    """
+    # 1. direct
+    if key in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[key]
+
+    # 2. strip accents
+    key_na = "".join(
+        c for c in unicodedata.normalize("NFD", key)
+        if unicodedata.category(c) != "Mn"
+    )
+    if key_na in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[key_na]
+
+    # 3. normalize apostrophes
+    key_ap = key.replace("\u2019", "'").replace("\u2018", "'")
+    if key_ap in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[key_ap]
+
+    # 4. both
+    key_ap_na = "".join(
+        c for c in unicodedata.normalize("NFD", key_ap)
+        if unicodedata.category(c) != "Mn"
+    )
+    if key_ap_na in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[key_ap_na]
+
+    return None
+
+
 def normalize_country(raw: Optional[str]) -> tuple[Optional[str], bool, Optional[str]]:
-    """Returns (country_name_normalized, is_multi_country, countries_list_json)."""
+    """
+    Returns (country_name_normalized, is_multi_country, countries_list_json).
+
+    Handles:
+    - Single country strings in English or French, any casing
+    - Multi-country strings separated by ; , | /
+    - UN official long names → short canonical names
+    - Accented characters and curly apostrophes
+    - Regional / global keywords
+    """
     if not raw:
         return None, False, None
+
     raw = str(raw).strip()
+
+    # split on common separators to handle multi-country strings
     parts = [p.strip() for p in re.split(r"[;,|/]", raw) if p.strip()]
 
     normalized_parts = []
     for part in parts:
-        alias = COUNTRY_ALIASES.get(part.lower())
-        normalized_parts.append(alias if alias else part.title())
+        key      = part.lower()
+        resolved = _lookup_alias(key)
+        if resolved:
+            normalized_parts.append(resolved)
+        else:
+            # unknown → title-case as fallback, same as old behaviour
+            normalized_parts.append(part.title())
 
     is_multi = len(normalized_parts) > 1
 
-    global_keywords = {"global", "regional", "various", "multi-country", "worldwide"}
-    if any(p.lower() in global_keywords for p in parts):
-        return "Global / Multi-Country", True, json.dumps(normalized_parts)
+    # check if any part is a global/regional keyword
+    if any(p.lower() in _GLOBAL_KEYWORDS for p in normalized_parts):
+        return "Multiple Countries", True, json.dumps(normalized_parts)
 
-    primary = normalized_parts[0] if normalized_parts else None
+    primary        = normalized_parts[0] if normalized_parts else None
     countries_json = json.dumps(normalized_parts) if is_multi else None
+
     return primary, is_multi, countries_json
 
 
@@ -522,14 +881,10 @@ def normalize_org_name(raw: Optional[str]) -> Optional[str]:
 
 # ── Funding agency ────────────────────────────────────────────────────────────
 
-# Static agency names for portals that are themselves the funding institution.
-# For UNGM, the funding agency is the procuring organisation itself (variable),
-# so we pass org_name_normalized through instead of a hard-coded string.
-
 _PORTAL_FUNDING_AGENCY: dict[str, str] = {
     "worldbank": "World Bank",
-    "undp":      "United Nations Development Programme (UNDP)",
-    "afdb":      "African Development Bank (AfDB)",
+    "undp":      "UNDP",
+    "afdb":      "AFDB",
 }
 
 
@@ -537,13 +892,6 @@ def resolve_funding_agency(
     portal: str,
     org_name_normalized: Optional[str],
 ) -> Optional[str]:
-    """
-    Return the funding agency name for a tender.
-
-    - worldbank / undp / afdb  → fixed institution name
-    - ungm                     → the procuring organisation's normalised name
-    - anything else            → None
-    """
     static = _PORTAL_FUNDING_AGENCY.get(portal)
     if static:
         return static
@@ -555,7 +903,6 @@ def resolve_funding_agency(
 # ── Text cleaning ─────────────────────────────────────────────────────────────
 
 def _clean_text(raw: Optional[str]) -> Optional[str]:
-    """Strip HTML tags, decode common entities, collapse whitespace."""
     if not raw:
         return None
     text = re.sub(r"<[^>]+>", " ", str(raw))
@@ -565,7 +912,7 @@ def _clean_text(raw: Optional[str]) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  UNGM: IC title keyword pattern (compiled once at module level)
+#  UNGM / AfDB IC title patterns
 # ─────────────────────────────────────────────────────────────────────────────
 
 _UNGM_IC_TITLE_RE = re.compile(
@@ -580,33 +927,24 @@ _UNGM_IC_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _AFDB_IC_TITLE_RE = re.compile(
-    r"\b("  # open group
+    r"\b("
     r"consultant(?:e)?\s+individuel(?:le)?"
     r"|individual\s+consultant"
     r"|individual\s+contractor"
-    r"|recrutement\s+d['’]un(?:e)?\s+consultant(?:e)?"
+    r"|recrutement\s+d['']un(?:e)?\s+consultant(?:e)?"
     r"|recruitment\s+of\s+a(?:n)?\s+(?:junior\s+)?consultant"
-    r"|s[eé]lection\s+d['’]un(?:e)?\s+consultant(?:e)?\s+individuel(?:le)?"
+    r"|s[eé]lection\s+d['']un(?:e)?\s+consultant(?:e)?\s+individuel(?:le)?"
     r"|selection\s+of\s+(?:an?\s+)?individual\s+consultant"
     r"|expert(?:e)?\s+individuel(?:le)?"
     r")\b",
     re.IGNORECASE,
 )
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  TITLE NORMALIZER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def normalize_title(raw: Optional[str], portal: str) -> Optional[str]:
-    """
-    Clean and normalize a tender title based on its source portal.
-
-    UNGM  — strip leading codes like "RFQ/67/2026/MEQ/ROLAC_"
-    UNDP  — 10-step pipeline removing reference codes, notice-type prefixes,
-             org prefixes, and stray artefacts while preserving real title
-             content in any language (EN / FR / ES / PT / AR / RU)
-    AfDB  — strip leading notice-type + country prefix
-    All   — HTML stripping, entity decoding, whitespace collapse via _clean_text()
-    """
     if not raw or not isinstance(raw, str):
         return None
 
@@ -614,36 +952,13 @@ def normalize_title(raw: Optional[str], portal: str) -> Optional[str]:
     if not t:
         return None
 
-    # ─────────────────────────────────────────────────────────────────────────
     if portal == "ungm":
-
-        # 1. Slash-based reference codes: "RFQ/67/2026/MEQ/ROLAC_"
         t = re.sub(r'^[A-Z0-9][A-Za-z0-9_]*(?:/[A-Za-z0-9_]+)+[/_]', '', t)
-
-        # 2. LRFQ/LRFP/LRPS codes: "LRFQ-2026-9203124"
-        t = re.sub(
-            r'^L?R[A-Z]{1,3}[-\s]\d[\d\-]*\s+(?:for\s+(?:the\s+)?)?',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # 3. "Request for Quotation/Proposal/Information" and "Call for Quotation"
-        t = re.sub(
-            r'^(?:Request\s+for\s+(?:Quotation|Proposal|Information)'
-            r'|Call\s+for\s+(?:Quotation|Proposals?))'
-            r'\s*(?:for\s+(?:the\s+)?|:\s*|-\s*)?',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # 4. Leading qualifiers ending with period: "For Egyptian companies only . "
+        t = re.sub(r'^L?R[A-Z]{1,3}[-\s]\d[\d\-]*\s+(?:for\s+(?:the\s+)?)?', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'^(?:Request\s+for\s+(?:Quotation|Proposal|Information)|Call\s+for\s+(?:Quotation|Proposals?))\s*(?:for\s+(?:the\s+)?|:\s*|-\s*)?', '', t, flags=re.IGNORECASE)
         t = re.sub(r'^(?:For\s+[^.]{0,50})\.\s+', '', t, flags=re.IGNORECASE)
-
-        # 5. Strip known org-name prefix at the very start
         t = re.sub(r'^(WFP|WHO|ILO|IOM|ITU|FAO|IFC|IDLO)\s+', '', t)
-
-        # 6. Remove [Re-Tender] / [Extension] bracketed annotations
         t = re.sub(r'\s*\[.*?\]', '', t)
-
-        # 7. Expand org abbreviations to full names anywhere in title
         org_names = {
             r'\bILO\b':  'International Labour Organization',
             r'\bIOM\b':  'International Organization for Migration',
@@ -656,136 +971,50 @@ def normalize_title(raw: Optional[str], portal: str) -> Optional[str]:
         }
         for abbr, full in org_names.items():
             t = re.sub(abbr, full, t)
-
-        # 8. Remove leading/trailing punctuation and double spaces
         t = re.sub(r'^[\s\-_,]+', '', t)
         t = re.sub(r'[\s\-_,]+$', '', t)
         t = re.sub(r'\s{2,}', ' ', t)
         t = t.strip(' .')
 
-    # ─────────────────────────────────────────────────────────────────────────
     elif portal == "undp":
-
-        # ── Step 1: pure numeric / underscore prefix ──────────────────────────
-        # "90_Medical Equipment...", "34_Two hybrid...", "576_scaling up..."
         t = re.sub(r'^\d+[_\s]+', '', t)
         if t and t[0].islower():
             t = t[0].upper() + t[1:]
-
-        # ── Step 2: **annotation** wrappers ───────────────────────────────────
-        # "**Readvertisement**Supply..." → "Supply..."
         t = re.sub(r'^\*\*[^*]+\*\*\s*', '', t)
-
-        # ── Step 3: IAL and INVITACION phrases ────────────────────────────────
-        t = re.sub(
-            r'^INVITACI[OÓ]N\s+A\s+LICITAR\s+(?:IAL\s+)?',
-            '', t, flags=re.IGNORECASE
-        )
+        t = re.sub(r'^INVITACI[OÓ]N\s+A\s+LICITAR\s+(?:IAL\s+)?', '', t, flags=re.IGNORECASE)
         t = re.sub(r'^IAL\s+(?:No\.\s+)?', '', t, flags=re.IGNORECASE)
-
-        # ── Step 4: REQUEST FOR ... phrase ────────────────────────────────────
-        t = re.sub(
-            r'^REQUEST\s+FOR\s+(?:QUOTATION|PROPOSAL|EXPRESSION\s+OF\s+INTEREST)'
-            r'\s*(?:\([^)]+\))?\s*(?:[-–]\s*)?',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # ── Step 5a: Full UNDP codes ───────────────────────────────────────────
-        # "UNDP-HND-00586: ", "UNDP-ECU-00878 ", "UNDP/RFP/05/2026-"
-        t = re.sub(
-            r'^UNDP[-/][A-Z0-9]+(?:[-/][A-Z0-9]+)*\s*[:\s;/-]\s*',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # ── Step 5b: Country-office codes with digits ─────────────────────────
-        # "LBN-CO-ITB-67-26-", "SDC-003-2026 "
-        t = re.sub(
-            r'^[A-Z]{2,4}-[A-Z0-9]+(?:-[A-Z0-9]+)*[-\s]+',
-            lambda m: '' if re.search(r'\d', m.group()) else m.group(),
-            t
-        )
-
-        # ── Step 5c: Type code + space-separated digit block ──────────────────
-        # "RFQ 777-2026 for ", "RFP- 00207 - "
-        t = re.sub(
-            r'^(?:RFP|RFQ|ITB|EOI|IFB|REOI)\s*[-–]?\s*\d[\d\-/]*'
-            r'(?:\s+for\s+|\s*[-–:;/]\s*|\s+)',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # ── Step 5d: Alphanumeric tokens with embedded digits ─────────────────
-        # "PRC0154360 ", "ITB26/03131: ", "EGG2-RfQ-", "RFP2026/08: "
-        t = re.sub(
-            r'^[A-Za-z]+\d[A-Za-z0-9]*(?:[-/][A-Za-z0-9]+)*'
-            r'\s*(?:[-/:;]\s*|(?<=\d)\s+)',
-            lambda m: '' if re.search(r'\d', m.group()) else m.group(),
-            t
-        )
-
-        # ── Step 5e: Multi-segment type-digit-word-digit codes ────────────────
-        # "RFP-017-IND-2026-"
-        t = re.sub(
-            r'^(?:[A-Z]{2,5}[-/])+\d[\d\-A-Z]*[-/]',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # ── Step 6: notice-type prefixes without digits ───────────────────────
-        # "INC-", "INCL - ", "Framework-"
+        t = re.sub(r'^REQUEST\s+FOR\s+(?:QUOTATION|PROPOSAL|EXPRESSION\s+OF\s+INTEREST)\s*(?:\([^)]+\))?\s*(?:[-–]\s*)?', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'^UNDP[-/][A-Z0-9]+(?:[-/][A-Z0-9]+)*\s*[:\s;/-]\s*', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'^[A-Z]{2,4}-[A-Z0-9]+(?:-[A-Z0-9]+)*[-\s]+', lambda m: '' if re.search(r'\d', m.group()) else m.group(), t)
+        t = re.sub(r'^(?:RFP|RFQ|ITB|EOI|IFB|REOI)\s*[-–]?\s*\d[\d\-/]*(?:\s+for\s+|\s*[-–:;/]\s*|\s+)', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'^[A-Za-z]+\d[A-Za-z0-9]*(?:[-/][A-Za-z0-9]+)*\s*(?:[-/:;]\s*|(?<=\d)\s+)', lambda m: '' if re.search(r'\d', m.group()) else m.group(), t)
+        t = re.sub(r'^(?:[A-Z]{2,5}[-/])+\d[\d\-A-Z]*[-/]', '', t, flags=re.IGNORECASE)
         t = re.sub(r'^(?:INCL?|Framework)\s*[-–\s]+', '', t, flags=re.IGNORECASE)
-        # "IC " — only when followed by a capital (guards "ICT", "ICS" etc.)
         t = re.sub(r'^IC\s+(?=[A-Z])', '', t)
-        # "RFP-Rebid ", "RFP-Re..."
-        t = re.sub(
-            r'^(?:RFP|RFQ|ITB|EOI|IFB)\s*[-–]\s*(?:Rebid|Re\w+)\s+',
-            '', t, flags=re.IGNORECASE
-        )
-
-        # ── Step 7: "UNDP CountryName -" org prefix ───────────────────────────
+        t = re.sub(r'^(?:RFP|RFQ|ITB|EOI|IFB)\s*[-–]\s*(?:Rebid|Re\w+)\s+', '', t, flags=re.IGNORECASE)
         t = re.sub(r'^UNDP\s+[A-Z][a-zA-Z\s]{2,35}\s*[-–]\s*', '', t)
-
-        # ── Step 8: leading connector words left after stripping ──────────────
-        # Only strip when the NEXT word is capitalised
         t = re.sub(r'^(?:to|for|of|the|du|d\'|en|et)\s+(?=[A-Z])', '', t)
-
-        # ── Step 9: trailing reference suffix ─────────────────────────────────
-        t = re.sub(
-            r'\s+[A-Z]{2,}(?:[/\-][A-Z0-9]+)+(?:[\-\s]+[A-Z]+)?\s*$',
-            '', t,
-        )
-
-        # ── Step 10: stray artefacts and leading punctuation ──────────────────
+        t = re.sub(r'\s+[A-Z]{2,}(?:[/\-][A-Z0-9]+)+(?:[\-\s]+[A-Z]+)?\s*$', '', t)
         t = re.sub(r'\s*=\s*', ' ', t)
         t = re.sub(r'^[\s\-_,;:]+', '', t)
-
-        # If nothing meaningful remains (bare reference code), return None
         if t and re.match(r'^[A-Z0-9\-/]+$', t):
             return None
 
     elif portal == "afdb":
-
-        # Expand country abbreviations in title
         AFDB_COUNTRY_EXPANSIONS = {
-            r'\bRDC\b': 'Democratic Republic of the Congo',
+            r'\bRDC\b': 'DR Congo',
             r'\bRCA\b': 'Central African Republic',
         }
         for pattern, replacement in AFDB_COUNTRY_EXPANSIONS.items():
             t = re.sub(pattern, replacement, t)
-
-        # Strip leading notice-type code prefix
-        t = re.sub(
-            r'^(?:AOI|SPN|PPM|EOI|RFP|RFQ|AMI|AAO|AGPM|REOI|AON|GPN)\s*-\s*',
-            '', t, flags=re.IGNORECASE,
-        )
-
-        # Strip leading country segment
+        t = re.sub(r'^(?:AOI|SPN|PPM|EOI|RFP|RFQ|AMI|AAO|AGPM|REOI|AON|GPN)\s*-\s*', '', t, flags=re.IGNORECASE)
         t = re.sub(r'^([^-]+?)\s*-\s*', r'\1 ', t)
         t = re.sub(r'\s+-\s+[A-Z][A-Z0-9\-]+$', '', t)
 
-    # ── Strip trailing project code for ALL portals ───────────────────────────
-    # " - PASEA-RD"  " - RWSSIP"  " - TACFiC"
+    # strip trailing project code for ALL portals
     t = re.sub(r'\s+-\s+[A-Z][A-Z0-9\-]+$', '', t)
 
-    # ── Final cleanup for all portals ─────────────────────────────────────────
+    # final cleanup
     t = re.sub(r'\s{2,}', ' ', t).strip()
     return t or None
 
@@ -799,7 +1028,6 @@ REQUIRED_FIELDS = [
 
 
 def validate(record: dict) -> tuple[bool, list[str], list[str]]:
-    """Returns (is_valid, missing_fields, validation_flags)."""
     missing = [f for f in REQUIRED_FIELDS if not record.get(f)]
     flags: list[str] = []
 
@@ -821,19 +1049,13 @@ def validate(record: dict) -> tuple[bool, list[str], list[str]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def normalize_tender(tender: Tender, session) -> Optional[dict]:
-    """
-    Takes a raw Tender ORM object.
-    Returns a dict ready to upsert into normalized_tenders, or None on hard failure.
-    """
     try:
         now = _now_utc()
 
-        # Dates
         pub_dt  = parse_date(tender.publication_date)
         dead_dt = parse_date(tender.deadline_date, tender.deadline_time)
         days    = days_between(now, dead_dt)
 
-        # ── Notice type + Country ─────────────────────────────────────────────
         if tender.source_portal == "afdb":
             notice_code, notice_type_final, country_norm, is_multi, countries_json = (
                 _extract_afdb_notice_and_country(tender)
@@ -845,33 +1067,27 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
             notice_type_final = notice_label or notice_code or raw_notice
             country_norm, is_multi, countries_json = normalize_country(tender.country)
 
-        # Lifecycle + status
         stage, status = resolve_lifecycle(notice_code, dead_dt, tender.status_id)
 
-        # Budget
         budget_num, currency_iso = parse_budget(tender.budget)
         if not currency_iso and tender.currency:
             currency_iso = CURRENCY_MAP.get(str(tender.currency).strip().upper())
         budget_missing = budget_num is None
 
-        # Procurement
         proc_group  = normalize_procurement_group(tender.procurement_group)
         proc_method = normalize_procurement_method(
             tender.procurement_method_name or tender.procurement_method_code
         )
 
-        # UNGM: infer IC procurement method from title keywords when not already set
         if tender.source_portal == "ungm" and not proc_method:
             if _UNGM_IC_TITLE_RE.search(tender.title or ""):
                 proc_method = "Individual Contractor"
-        # AfDB: infer Individual Consultant from title keywords when not already set
         if tender.source_portal == "afdb" and not proc_method:
             if _AFDB_IC_TITLE_RE.search(tender.title or ""):
-             proc_method = "Individual Consultant"
-             if not proc_group:
-                 proc_group = "CONSULTING"
+                proc_method = "Individual Consultant"
+                if not proc_group:
+                    proc_group = "CONSULTING"
 
-        # Organisation + contact
         org_name_norm = None
         contact_name  = None
         contact_email = None
@@ -891,13 +1107,10 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
                     contact_email = contact.email
                     contact_phone = contact.phone
 
-        has_pdf = bool(tender.pdf_path)
-
-        # Funding agency — resolved after org_name_norm is known
+        has_pdf        = bool(tender.pdf_path)
         funding_agency = resolve_funding_agency(tender.source_portal, org_name_norm)
 
         record = {
-            # Core identification
             "tender_id":                    tender.id,
             "source_portal":                tender.source_portal,
             "notice_id":                    tender.tender_id,
@@ -905,52 +1118,40 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
             "organisation_id":              tender.organisation_id,
             "organisation_name_normalized": org_name_norm,
             "funding_agency":               funding_agency,
-            # Title
-            "title_clean":       normalize_title(tender.title, tender.source_portal),
-            "description_clean": None,   # reserved for NLP pipeline
-            # Dates
-            "publication_datetime": pub_dt,
-            "deadline_datetime":    dead_dt,
-            "days_to_deadline":     days,
-            "created_at":           now,
-            "updated_at":           now,
-            # Country
-            "country_name_normalized": country_norm,
-            "is_multi_country":        is_multi,
-            "countries_list":          countries_json,
-            # Notice type
-            "notice_type_normalized": notice_type_final,
-            # Lifecycle
-            "lifecycle_stage":   stage,
-            "status_normalized": status,
-            # Procurement
+            "title_clean":                  normalize_title(tender.title, tender.source_portal),
+            "description_clean":            None,
+            "publication_datetime":         pub_dt,
+            "deadline_datetime":            dead_dt,
+            "days_to_deadline":             days,
+            "created_at":                   now,
+            "updated_at":                   now,
+            "country_name_normalized":      country_norm,
+            "is_multi_country":             is_multi,
+            "countries_list":               countries_json,
+            "notice_type_normalized":       notice_type_final,
+            "lifecycle_stage":              stage,
+            "status_normalized":            status,
             "project_id":                   tender.project_id,
             "procurement_group_normalized": proc_group,
             "procurement_method_name":      proc_method,
-            # Budget
-            "budget_numeric": budget_num,
-            "currency_iso":   currency_iso,
-            "budget_missing": budget_missing,
-            # Documents
-            "pdf_path":       tender.pdf_path,
-            "has_pdf":        has_pdf,
-            "document_count": 1 if has_pdf else 0,
-            # Contact
-            "contact_name":  contact_name,
-            "contact_email": contact_email,
-            "contact_phone": contact_phone,
-            # Status
-            "status_id":         tender.status_id,
-            "source_status_raw": str(tender.status_id) if tender.status_id is not None else None,
-            # Sector — reserved for NLP pipeline
-            "cpv_code":      None,
-            "cpv_label":     None,
-            "unspsc_code":   None,
-            "unspsc_label":  None,
-            "sector_source": None,
-            # Data integrity
-            "normalization_status": "success",
-            "normalized_at":        now,
+            "budget_numeric":               budget_num,
+            "currency_iso":                 currency_iso,
+            "budget_missing":               budget_missing,
+            "pdf_path":                     tender.pdf_path,
+            "has_pdf":                      has_pdf,
+            "document_count":               1 if has_pdf else 0,
+            "contact_name":                 contact_name,
+            "contact_email":                contact_email,
+            "contact_phone":                contact_phone,
+            "status_id":                    tender.status_id,
+            "source_status_raw":            str(tender.status_id) if tender.status_id is not None else None,
+            "cpv_code":                     None,
+            "cpv_label":                    None,
+            "unspsc_code":                  None,
+            "unspsc_label":                 None,
+            "sector_source":                None,
+            "normalization_status":         "success",
+            "normalized_at":                now,
         }
 
         is_valid, missing, flags = validate(record)
@@ -972,10 +1173,6 @@ def normalize_tender(tender: Tender, session) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def upsert_normalized(session, record: dict) -> None:
-    """
-    PostgreSQL upsert on (tender_id).
-    On conflict: update all fields except id, tender_id, and created_at.
-    """
     stmt = pg_insert(NormalizedTender.__table__).values(**record)
     update_cols = {
         c.name: stmt.excluded[c.name]

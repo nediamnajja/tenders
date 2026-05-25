@@ -2252,7 +2252,7 @@ def run_nlp_enrichment(
             )
             .join(Tender, EnrichedTender.tender_id == Tender.id)
             .where(
-                EnrichedTender.enrichment_status == "rules_complete",
+                EnrichedTender.enrichment_status.in_(["rules_complete", "seeded"]),
                 EnrichedTender.source_portal.in_(portals),
             )
             .order_by(EnrichedTender.tender_id)

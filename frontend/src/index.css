@@ -1,36 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  html, body, * {
+    font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  }
   body {
     @apply bg-gray-50 text-gray-900 antialiased;
+    color: #111827;
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply bg-kpmg-blue text-white px-4 py-2 rounded-lg font-medium
+    @apply bg-kpmg-blue text-white px-4 py-2 font-medium
            hover:bg-kpmg-lightblue transition-colors duration-150
            disabled:opacity-50 disabled:cursor-not-allowed;
+    border-radius: 4px;
   }
   .btn-secondary {
-    @apply bg-white text-kpmg-blue border border-kpmg-blue px-4 py-2 rounded-lg
+    @apply bg-white text-kpmg-blue border border-kpmg-blue px-4 py-2
            font-medium hover:bg-blue-50 transition-colors duration-150;
+    border-radius: 4px;
   }
   .card {
-    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
-  }
-  .badge-strong-go {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-           bg-green-100 text-green-800;
-  }
-  .badge-go {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-           bg-blue-100 text-blue-800;
-  }
-  .badge-no-go {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-           bg-red-100 text-red-800;
+    @apply bg-white border border-gray-200;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 }

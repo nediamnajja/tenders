@@ -5,6 +5,7 @@ KPMG Tender Pipeline — Main Orchestrator
 Triggered every day at 7:00 AM by Windows Task Scheduler.
 
 Pipeline order:
+  Step 0  — Daily Cleanup (refresh deadlines, remove expired)
   Step 1  — Scrapers (4 portals, sequential)
   Step 2  — Normalizer
   Step 3  — Enrichment: normalisationseed0
@@ -65,6 +66,11 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 
 PIPELINE = [
+    # ── STEP 0: Daily Cleanup ────────────────────────────────
+    # Runs first — refreshes deadlines, removes expired scores,
+    # resets p_go for tenders with < 2 days remaining
+   ("Daily Cleanup", os.path.join("scoring", "cleanuprec.py")),
+
     # ── STEP 1: Scrapers ────────────────────────────────────
     ("Scraper — AFDP",       "scraper_afdp_daily.py"),
     ("Scraper — UNDP",       "scraper_undp_daily.py"),
@@ -89,7 +95,8 @@ PIPELINE = [
     ("Email Alert", "alerts/email_alert.py"),
 
     # ── STEP 10: LLM Enrichment — NOT BUILT YET ─────────────
-    # ("LLM Enrichment", os.path.join("enricher", "llm_enrichment.py")),
+    ("LLM Enrichment", os.path.join("enricher", "llm_step1.py")),
+    ("LLM Enrichment", os.path.join("enricher", "llm_step2.py")),
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -178,7 +185,6 @@ def run_pipeline():
             failed_steps.append(label)
 
             # ── CRITICAL STEPS: stop pipeline if these fail ──
-            # If scrapers all fail or scoring fails, no point continuing
             critical = ["Scoring — Logistic Regression"]
             if label in critical:
                 logger.error(f"\n  🛑  Critical step failed — stopping pipeline")

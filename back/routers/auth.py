@@ -12,9 +12,9 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models.db_models import PlatformUser
-from schemas.schemas import LoginRequest, TokenResponse, UserMe
+from back.database import get_db
+from back.models.db_models import PlatformUser
+from back.schemas.schemas import LoginRequest, TokenResponse, UserMe
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth", tags=["auth"])

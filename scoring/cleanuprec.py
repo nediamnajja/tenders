@@ -1,19 +1,20 @@
 """
-daily_cleanup.py
+cleanuprec.py
 ================
 KPMG Tender Pipeline — Daily Cleanup
-Runs as Step 1 in the orchestrator, before scrapers.
+Runs as Step 0 in the orchestrator, before scrapers.
 
 What it does:
 1. Recomputes days_to_deadline for ALL enriched tenders
    (deadline_datetime is stored, days_to_deadline goes stale daily)
-2. Removes tender_scores rows where deadline has passed
-3. Resets p_go to NULL for expired tenders so they don't show up in alerts
+2. Hides expired tenders from pipeline by setting p_go = NULL
+   (does NOT delete tender_scores — scores are preserved for detail view)
+3. Resets p_go to NULL for tenders with < 2 days remaining
 4. Prints a summary
 
 Run standalone:
     cd C:\\projects\\tenders
-    python daily_cleanup.py
+    python scoring\\cleanuprec.py
 """
 
 import sys
@@ -21,9 +22,10 @@ import os
 import logging
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from db import get_session
-from models import EnrichedTender, TenderScore  # adjust if TenderScore is named differently
+from models import EnrichedTender, TenderScore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,10 +44,10 @@ def run_daily_cleanup():
     logger.info("=" * 55)
 
     stats = {
-        "deadlines_refreshed": 0,
-        "expired_scores_deleted": 0,
-        "expired_p_go_reset": 0,
-        "errors": 0,
+        "deadlines_refreshed":  0,
+        "expired_hidden":       0,
+        "expired_p_go_reset":   0,
+        "errors":               0,
     }
 
     with get_session() as session:
@@ -62,14 +64,10 @@ def run_daily_cleanup():
         for tender in tenders:
             try:
                 dl = tender.deadline_datetime
-                # Make timezone-aware if naive
                 if dl.tzinfo is None:
                     dl = dl.replace(tzinfo=timezone.utc)
-
-                new_days = (dl - NOW).days
-                tender.days_to_deadline = new_days
+                tender.days_to_deadline = (dl - NOW).days
                 stats["deadlines_refreshed"] += 1
-
             except Exception as e:
                 logger.error(f"  Error refreshing tender {tender.id}: {e}")
                 stats["errors"] += 1
@@ -77,41 +75,46 @@ def run_daily_cleanup():
         session.commit()
         logger.info(f"  ✅ Refreshed {stats['deadlines_refreshed']} deadlines")
 
-        # ── Step 2: Delete tender_scores where deadline has passed ────────
-        logger.info("  Step 2 — Removing expired recommendations...")
+        # ── Step 2: Hide expired tenders from pipeline ────────────────────
+        # Sets p_go = NULL so they don't appear in dashboard/alerts
+        # Does NOT delete tender_scores — scores preserved for detail view
+        logger.info("  Step 2 — Hiding expired tenders from pipeline...")
 
         try:
-            # Find enriched_tender_ids where deadline has passed (days < 0)
             expired_ids = [
                 t.id for t in tenders
                 if t.days_to_deadline is not None and t.days_to_deadline < 0
             ]
 
             if expired_ids:
-                deleted = (
-                    session.query(TenderScore)
-                    .filter(TenderScore.enriched_tender_id.in_(expired_ids))
-                    .delete(synchronize_session=False)
+                expired_tenders = (
+                    session.query(EnrichedTender)
+                    .filter(EnrichedTender.id.in_(expired_ids))
+                    .all()
                 )
-                stats["expired_scores_deleted"] = deleted
+                for t in expired_tenders:
+                    t.p_go = None  # hide from pipeline — score preserved in tender_scores
+
                 session.commit()
-                logger.info(f"  ✅ Deleted {deleted} expired recommendations")
+                stats["expired_hidden"] = len(expired_ids)
+                logger.info(f"  ✅ Hidden {len(expired_ids)} expired tenders from pipeline")
             else:
-                logger.info("  ✅ No expired recommendations to delete")
+                logger.info("  ✅ No expired tenders to hide")
 
         except Exception as e:
-            logger.error(f"  Error deleting expired scores: {e}")
+            logger.error(f"  Error hiding expired tenders: {e}")
             stats["errors"] += 1
 
-        # ── Step 3: Reset p_go for tenders with deadline < 2 days ─────────
+        # ── Step 3: Reset p_go for tenders with < 2 days remaining ────────
         # So they won't be shown in alerts or re-scored
-        logger.info("  Step 3 — Resetting p_go for imminent/expired tenders...")
+        logger.info("  Step 3 — Resetting p_go for imminent tenders (< 2 days)...")
 
         try:
             imminent = (
                 session.query(EnrichedTender)
                 .filter(
                     EnrichedTender.days_to_deadline < 2,
+                    EnrichedTender.days_to_deadline >= 0,
                     EnrichedTender.p_go.isnot(None),
                 )
                 .all()
@@ -124,19 +127,19 @@ def run_daily_cleanup():
                 stats["expired_p_go_reset"] += 1
 
             session.commit()
-            logger.info(f"  ✅ Reset p_go for {stats['expired_p_go_reset']} expired tenders")
+            logger.info(f"  ✅ Reset p_go for {stats['expired_p_go_reset']} imminent tenders")
 
         except Exception as e:
-            logger.error(f"  Error resetting p_go: {e}")
+            logger.error(f"  Error resetting imminent tenders: {e}")
             stats["errors"] += 1
 
     # ── Summary ───────────────────────────────────────────────────────────
     logger.info("=" * 55)
     logger.info("  CLEANUP COMPLETE")
-    logger.info(f"  Deadlines refreshed    : {stats['deadlines_refreshed']}")
-    logger.info(f"  Expired scores deleted : {stats['expired_scores_deleted']}")
-    logger.info(f"  Expired p_go reset     : {stats['expired_p_go_reset']}")
-    logger.info(f"  Errors                 : {stats['errors']}")
+    logger.info(f"  Deadlines refreshed : {stats['deadlines_refreshed']}")
+    logger.info(f"  Expired hidden      : {stats['expired_hidden']}")
+    logger.info(f"  Imminent reset      : {stats['expired_p_go_reset']}")
+    logger.info(f"  Errors              : {stats['errors']}")
     logger.info("=" * 55)
 
 
